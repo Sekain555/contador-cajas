@@ -1,6 +1,6 @@
 # CONTEXTO: Contador de cajas (Rucaray)
 
-> Documento vivo. Se actualiza al cerrar cada card. Borrador inicial: 2026-11-04.
+> Documento vivo. Se actualiza al cerrar cada card. Última actualización: 2026-11-05 (Fase 0).
 
 ## Qué es y para quién
 Contador de cajas en la línea de embalaje de Rucaray. Muestra, en una página web servida por el propio ESP32, cuántas cajas han pasado. Los inspectores del SAG lo usan para contrastar las cajas embaladas con las cajas que deben revisar según la PreSIF (Sistema de Instructivos Rucaray).
@@ -12,7 +12,7 @@ Solo visualiza. No guarda historial por hora, no calcula cajas por minuto y no e
 - **Sensores:** 2 × Datalogic S60-PA-5-B01-PP. Retrorreflectivo polarizado con reflector, PNP, 10 a 30 V, salida NO (dark-on): con la caja cortando el haz, la salida sube a ~24 V.
 - **Aislamiento:** 2 × 4N26. LED del lado de 24 V con R de 2,2 kΩ; fototransistor del lado del ESP32 con el pull-up interno. Pendiente: cambiar R1 y R2 a 1/2 W (hoy disipan 79 a 94 % de 1/4 W).
 - **Alimentación:** fuente de 24 V para sensores y fuente de 5 V al pin VIN del ESP32. El 0 V de 24 V y el GND de 5 V son redes independientes (es el aislamiento).
-- **Reset:** botón RST del joystick entre GPIO 27 y GND.
+- **Reset:** botón RST del joystick entre GPIO 27 y GND (verificado: deja el conteo en 0 con el firmware v1.0.1).
 - **Montaje:** mini protoboard. Pendiente: pasar los empalmes de señal a soldadura o borneras (ya hubo falsos conteos por cables sueltos).
 
 ### Pines
@@ -42,17 +42,37 @@ Los pines 3 y 6 de los 4N26 quedan sin conexión. Entre las redes de 24 V y 5 V 
 - Conectar o mover cables solo con todo apagado.
 - Para programar: USB al PC con VIN desconectado; si el IDE queda en «Connecting…», mantener BOOT.
 
-## Firmware: v1.0.0 (línea base)
+## Firmware
+
+### v1.0.0 (línea base)
 - Tarea de conteo en el núcleo 1, una muestra por milisegundo, prioridad 2. Cada cambio de nivel debe durar `CONFIRMA_MS` = 5 ms. Bloqueo tras contar `DEBOUNCE_MS` = 30 ms; botón RST 250 ms.
 - Páginas: `/` (conteo grande) y `/api/count` (`{"count":N}`). Biblioteca `WebServer` del core, sin librerías de terceros.
 - Red: modo estación; si no conecta en 15 s al arrancar, crea una red propia de respaldo. Nombre mDNS `contador-cajas`.
 - Credenciales en `secrets.h`, fuera del repositorio; la plantilla es `secrets.example.h`.
 - Estado: pasó las pruebas de estabilidad (reposo de 5 minutos con la fuente de 5 V sola).
 
-### Línea base de memoria (v1.0.0, compilación del IDE)
-- Flash: 876.504 de 1.310.720 bytes (66 %). El tope es una de las dos ranuras de aplicación de la tabla de particiones por defecto (0x140000 cada una), que es lo que permite OTA.
-- Variables globales: 45.672 de 327.680 bytes (13 %).
-- Heap y pila en ejecución: se miden en la Fase 0 (línea `[mem]` del monitor serie).
+### v1.0.1 (Fase 0)
+- Imprime la versión al arrancar: `Contador de cajas v1.0.1`.
+- Línea `[mem]` cada 10 s en el monitor serie: `libre`, `minimo`, `bloque_max`, `pila_conteo` y `pila_loop`.
+- La página y el JSON se envían con `send_P` y un buffer fijo (`snprintf`), sin `String`: la página ya no se copia al heap en cada solicitud.
+- Sin cambios de comportamiento: `/`, `/api/count`, el conteo y el reset funcionan igual que en v1.0.0.
+
+### Memoria (medida en la Fase 0, v1.0.1)
+- **Compilación:** flash 962.064 de 1.310.720 bytes (73 %), quedan 348.656 B; variables globales 49.488 de 327.680 bytes (15 %). El tope de flash es una de las dos ranuras de aplicación de la tabla de particiones por defecto (0x140000 cada una), que es lo que permite OTA.
+- **Antes del cambio a `send_P`:** flash 962.084 B y globales 49.488 B.
+- **Base de v1.0.0:** la compilación del v1.0.0 sin cambios no se midió. Los 876.504 B (66 %) y 45.672 B (13 %) que figuraban como línea base correspondían a otro sketch y no valen. La referencia de comparación para las fases siguientes es v1.0.1.
+- **En ejecución** (WiFi conectado, 20 recargas de la página desde un celular), en bytes. A = reposo 30 s tras presionar EN, sin celular. B = 30 s después de las 20 recargas y de cerrar la pestaña. Las pilas son los bytes libres en el punto más justo.
+
+| Valor | Con `send` (A → B) | Con `send_P` (A → B) |
+|---|---|---|
+| `libre` | 218.240 → 214.356 | 214.272 → 214.484 |
+| `minimo` | 190.464 → 185.348 | 200.684 → 192.964 |
+| `bloque_max` | 110.580 → 110.580 | 110.580 → 110.580 |
+| `pila_conteo` | 3.552 → 3.552 | 3.552 → 3.552 |
+| `pila_loop` | 5.852 → 5.596 | 5.532 → 5.532 |
+
+- **Lectura:** con `send_P` el pico transitorio al recargar bajó de ~29 KB a ~21,5 KB. No hay señal de fuga ni de fragmentación. La tarea de conteo usa ~0,5 KB de su pila de 4.096 B, y `loop()` ~2,7 KB de su pila (8 KB por defecto).
+- **Observación sin decidir:** el `libre` en reposo difirió ~4 KB entre dos mediciones (218.240 y 214.272), con causa sin determinar.
 
 ## Decisiones vigentes
 - Hardware limitado en memoria, sin memoria externa: código y funciones cuidadosos con la RAM y la flash. Medir después de cada fase.
