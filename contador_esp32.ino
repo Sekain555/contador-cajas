@@ -8,6 +8,8 @@
 #include <ESPmDNS.h>
 #include "secrets.h"  // WIFI_SSID, WIFI_PASS, AP_SSID, AP_PASS. Este archivo NO va al repositorio.
 
+const char VERSION[] = "1.0.1";
+
 // ---------- Pines ----------
 // Sin función de arranque ni de flash, con pull-up interno. Evitar GPIO 0, 2, 5, 12, 15 (arranque),
 // 6 a 11 (flash) y 34 a 39 (solo entrada, sin pull-up).
@@ -35,6 +37,7 @@ Canal rst = { PIN_RST, false, false, 0, 0 };
 
 volatile uint32_t conteo = 0;  // lo escribe solo la tarea de conteo
 WebServer servidor(80);
+TaskHandle_t hConteo = nullptr;  // para medir la pila libre de la tarea de conteo
 
 // Devuelve true cuando se confirma una bajada válida (LOW estable CONFIRMA_MS y fuera del bloqueo).
 bool flancoDeBajada(Canal &c, uint32_t ahora, uint32_t bloqueo) {
@@ -97,14 +100,15 @@ leer();setInterval(leer,1000);
 
 void rutaRaiz() {
   servidor.sendHeader("Cache-Control", "no-store");
-  servidor.send(200, "text/html; charset=utf-8", PAGINA);
+  servidor.send_P(200, "text/html; charset=utf-8", PAGINA);  // desde la flash, sin copiar la página al heap
 }
 
 void rutaConteo() {
   uint32_t copia = conteo;
-  String json = "{\"count\":" + String(copia) + "}";
+  char json[24];
+  snprintf(json, sizeof(json), "{\"count\":%lu}", (unsigned long)copia);
   servidor.sendHeader("Cache-Control", "no-store");
-  servidor.send(200, "application/json", json);
+  servidor.send_P(200, "application/json", json);  // acepta también un buffer en RAM, sin copiarlo a String
 }
 
 // ---------- Red ----------
@@ -142,6 +146,7 @@ void vigilarRed() {
 // ---------- Arranque y bucle ----------
 void setup() {
   Serial.begin(115200);
+  Serial.printf("\nContador de cajas v%s\n", VERSION);
   pinMode(PIN_S1, INPUT_PULLUP);
   pinMode(PIN_S2, INPUT_PULLUP);
   pinMode(PIN_RST, INPUT_PULLUP);
@@ -153,7 +158,7 @@ void setup() {
   rst.bajo = (digitalRead(PIN_RST) == LOW);
 
   // El conteo arranca antes que el WiFi, así que cuenta mientras la red se conecta.
-  xTaskCreatePinnedToCore(tareaConteo, "conteo", 4096, nullptr, 2, nullptr, 1);
+  xTaskCreatePinnedToCore(tareaConteo, "conteo", 4096, nullptr, 2, &hConteo, 1);
 
   iniciarRed();
   servidor.on("/", rutaRaiz);
@@ -170,6 +175,15 @@ void loop() {
   if (copia != ultimoImpreso) {  // misma salida que el Nano: una línea por cambio
     Serial.printf("{\"count\":%lu}\n", (unsigned long)copia);
     ultimoImpreso = copia;
+  }
+  static uint32_t ultimoMem = 0;
+  if (millis() - ultimoMem >= 10000) {  // línea de memoria cada 10 s
+    ultimoMem = millis();
+    Serial.printf("[mem] libre=%lu minimo=%lu bloque_max=%lu pila_conteo=%u pila_loop=%u\n",
+                  (unsigned long)ESP.getFreeHeap(), (unsigned long)ESP.getMinFreeHeap(),
+                  (unsigned long)ESP.getMaxAllocHeap(),
+                  (unsigned)uxTaskGetStackHighWaterMark(hConteo),
+                  (unsigned)uxTaskGetStackHighWaterMark(NULL));
   }
   delay(2);
 }
