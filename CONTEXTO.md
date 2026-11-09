@@ -1,6 +1,6 @@
 # CONTEXTO: Contador de cajas (Rucaray)
 
-> Documento vivo. Se actualiza al cerrar cada card. Última actualización: 2026-11-05 (Fase 1).
+> Documento vivo. Se actualiza al cerrar cada card. Última actualización: 2026-11-09 (Estado de sensores).
 
 ## Qué es y para quién
 Contador de cajas en la línea de embalaje de Rucaray. Muestra, en una página web servida por el propio ESP32, cuántas cajas han pasado. Los inspectores del SAG lo usan para contrastar las cajas embaladas con las cajas que deben revisar según la PreSIF (Sistema de Instructivos Rucaray).
@@ -65,8 +65,15 @@ Los pines 3 y 6 de los 4N26 quedan sin conexión. Entre las redes de 24 V y 5 V 
 - **Reinicio desde la página:** botón «Reiniciar conteo» dentro de la vista con sesión, con confirmación en dos pasos (muestra el total actual y se cancela sola a los 8 s) y sin pedir el PIN otra vez. La web no toca los contadores: levanta `pedirReset`, y la tarea de conteo hace el reinicio y pide guardar el 0 al instante. El botón físico RST hace lo mismo.
 - **Monitor serie:** `{"count":N,"s1":a,"s2":b}` en cada cambio, más las líneas `[nvs]`, `[acceso]` y `[mem]`.
 - **Versión:** `VERSION` sigue en `1.0.1`. El cambio de versión y los tags se hacen en el release final, al terminar todas las fases.
-- **Límites conocidos:** no hay HTTPS, así que el PIN y la cookie viajan sin cifrar dentro de la red interna. El bloqueo es global: quien falle 5 veces bloquea a todos por 60 s. El diseño de la página (título y formulario) se ve sin PIN; lo protegido son los datos.
+- **Límites conocidos:** no hay HTTPS, así que el PIN y la cookie viajan sin cifrar dentro de la red interna. El bloqueo es global: quien falle 5 veces bloquea a todos por 60 s. El diseño de la página (título y formulario) se ve sin PIN; lo protegido son los datos. La sesión es por dirección: entrar por la IP o por `contador-cajas.local` crea sesiones distintas, así que conviene comunicar una sola dirección a los inspectores.
 - **Verificado en banco** con las pruebas de humo de cada tanda: conteo por sensor, persistencia, PIN, bloqueo, sesiones y reinicio (página y botón físico).
+
+### Estado de sensores (en `dev` tras la Fase 1, sin versión nueva asignada)
+- **API:** `/api/count` suma `e1` y `e2`: valen 1 con el haz cortado y 0 con el haz libre. Es el nivel que la tarea de conteo ya filtra (5 ms en ambos sentidos) y que usa el conteo, y coincide con el LED amarillo de salida del sensor. El JSON queda `{"count":N,"s1":a,"s2":b,"e1":x,"e2":y}`.
+- **Lectura entre tareas:** `bajo`, el nivel filtrado de cada canal, es `volatile`, porque lo escribe la tarea de conteo y lo lee el servidor web. El buffer del JSON pasó a 80 bytes (el peor caso ocupa 66 caracteres).
+- **Página:** bajo cada contador se muestra «Libre» o «Caja pasando» (resaltado en verde). Está dentro del bloque que solo se ve con sesión, así que sin sesión no se entrega ni se muestra.
+- **Frecuencia:** la página consulta una vez por segundo, así que el indicador es una foto de cada segundo y un paso muy breve puede no verse. Se evaluó consultar cada 250 ms y usar WebSocket; se decidió dejarlo en 1 s, porque el indicador sirve para comprobar sensores y no para seguir cada caja. El conteo no depende del indicador.
+- **Verificado en banco:** el indicador de cada sensor sigue a su sensor y coincide con su LED; con cajas pasadas por ambos sensores, el conteo sube de a 1.
 
 ### Memoria (medida en la Fase 0, v1.0.1)
 - **Compilación:** flash 962.064 de 1.310.720 bytes (73 %), quedan 348.656 B; variables globales 49.488 de 327.680 bytes (15 %). El tope de flash es una de las dos ranuras de aplicación de la tabla de particiones por defecto (0x140000 cada una), que es lo que permite OTA.
@@ -96,17 +103,21 @@ Valores de la compilación del IDE (flash de 1.310.720 B por ranura, globales de
 | 4 | Fase 1, tanda 2 | Más persistencia en NVS: guardado cada 10 s, restauración al arrancar y reset anotado | 963.664 | 73 % | +1.232 | 49.512 | +24 |
 | 5 | Fase 1, tanda 3 | Más acceso con PIN: sesiones con cookie, bloqueo tras 5 intentos y formulario de PIN | 966.860 | 73 % | +3.196 | 49.712 | +200 |
 | 6 | Fase 1, tanda 4 | Más reinicio desde la página: `POST /api/reset` con sesión, `pedirReset` y botón con confirmación en dos pasos | 967.860 | 73 % | +1.000 | 49.712 | 0 |
+| 7 | Estado de sensores, tanda 1 | Más `e1` y `e2` en `/api/count`, `bajo` como `volatile` y buffer del JSON de 80 | 967.936 | 73 % | +76 | 49.712 | 0 |
+| 8 | Estado de sensores, tanda 2 | Más indicador «Libre» o «Caja pasando» bajo cada contador, en la página | 968.272 | 73 % | +336 | 49.712 | 0 |
 
-- **Estado actual:** flash 967.860 B (73 %), quedan 342.860 B en la ranura; globales 49.712 B (15 %).
-- **Fase 1 contra la referencia v1.0.1 (fila 2):** +5.796 B de flash y +224 B de RAM.
+- **Estado actual:** flash 968.272 B (73 %), quedan 342.448 B en la ranura; globales 49.712 B (15 %).
+- **Contra la referencia v1.0.1 (fila 2):** la Fase 1 suma +5.796 B de flash y +224 B de RAM; Estado de sensores suma otros +412 B de flash y ningún byte de RAM. En total, +6.208 B de flash y +224 B de RAM.
 - **En ejecución, Fase 1:** una lectura tras las pruebas de la tanda 4: `libre=215.296`, `minimo=202.672`, `bloque_max=110.580`, `pila_conteo=3.552`, `pila_loop=5.660`. Es una sola lectura, tomada en otras condiciones que las de la Fase 0, así que no es comparable uno a uno con A y B. No muestra señales de problema: la pila de la tarea de conteo es la misma que en la Fase 0 y `bloque_max` no cambió.
+- **En ejecución, Estado de sensores:** una lectura con la página abierta con sesión: `libre=218.636`, `minimo=202.928`, `bloque_max=110.580`, `pila_conteo=3.552`, `pila_loop=6.252`. Sigue sin señales de problema: `minimo` quedó en el mismo nivel que en la Fase 1 y las dos pilas conservan margen. `pila_loop` es el punto más justo desde el último arranque, así que cambia según qué rutas se usaron desde entonces; no es una tendencia.
+- **Cómo leer la línea `[mem]`:** lo que importa es `minimo` (el nivel de memoria libre más bajo desde el arranque; mientras esté lejos de 0 no hay problema de memoria) y que las dos pilas sean mayores que 0 (con 0 se desbordan y la placa se reinicia). `libre` es el valor de ese momento y `bloque_max` es el tramo libre continuo más grande; solo importan si cambian mucho entre lecturas, o si `bloque_max` cae mientras `libre` sigue alto, lo que indicaría fragmentación.
 
 ## Decisiones vigentes
 - Hardware limitado en memoria, sin memoria externa: código y funciones cuidadosos con la RAM y la flash. Medir después de cada fase.
 - Conteo persistente; el reinicio es solo manual (botón físico y página, con sesión).
 - Acceso restringido a los inspectores del SAG con un PIN único. Sesiones de 12 h (hasta 4) y bloqueo de 60 s tras 5 intentos fallidos. El reinicio desde la página no vuelve a pedir el PIN, pero sí una confirmación en dos pasos.
 - Estrategia de ramas distinta a SI: cada card se integra a `dev` por PR; el merge a `main` y los tags de versión se hacen una sola vez, al terminar todas las fases. `main` queda en `v1.0.0` hasta entonces.
-- Conteo por sensor, con el total destacado (Fase 1). El estado de cada sensor en la página llega con la Fase 2.
+- Conteo por sensor, con el total destacado (Fase 1). El estado de cada sensor se muestra en la página con la card «Estado de sensores» (una consulta por segundo).
 - Estado de conexión discreto en la página. La información técnica va aparte, en `/diagnostico`.
 - Red de respaldo que aparece solo si cae la red principal.
 - OTA con contraseña, si no retrasa el proyecto.
@@ -118,7 +129,8 @@ Valores de la compilación del IDE (flash de 1.310.720 B por ranura, globales de
 |---|---|---|
 | 0 | Línea base de memoria, `send_P` | PATCH (v1.0.1) |
 | 1 | Persistencia, conteo por sensor, acceso con PIN y reset desde la web | MINOR |
-| 2 | Modelo de conteo y estado de sensores | MINOR |
+| 2 | Modelo de conteo con rearme por haz libre (en pausa hasta tener el sistema montado, para medir) | MINOR |
+| — | Estado de sensores: `e1` y `e2` en la API e indicador en la página | MINOR |
 | 3 | Red de respaldo automática, `/diagnostico`, OTA | MINOR |
 | 4 | Estilo Rucaray | MINOR |
 
@@ -127,7 +139,7 @@ Valores de la compilación del IDE (flash de 1.310.720 B por ranura, globales de
 - Soldar o usar borneras en los empalmes de señal.
 - MAC autorizada en la red de Rucaray y reserva de IP (TI). El ESP32 solo trabaja en 2,4 GHz y, con el código actual, solo con WPA2 de clave compartida.
 - Logo (SVG si existe) y lista de colores.
-- Velocidad de la cinta y hueco mínimo entre cajas, para fijar `LIBRE_MS`.
+- Velocidad de la cinta y hueco mínimo entre cajas, para fijar `LIBRE_MS` (la Fase 2 queda en pausa hasta tener el sistema montado).
 - PIN definitivo (6 dígitos o más) y cómo se comunica a los inspectores.
 - Decidir el número de `VERSION` del release que reúna las fases (hoy `1.0.1`; el contenido de la Fase 1 es un cambio MINOR).
 

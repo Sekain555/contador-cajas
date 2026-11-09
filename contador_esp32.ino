@@ -28,10 +28,10 @@ const uint32_t GUARDADO_MS = 10000;    // el conteo se guarda como máximo una v
 // ---------- Estado de cada entrada ----------
 struct Canal {
   uint8_t pin;
-  bool bajo;        // nivel filtrado: true = LOW confirmado (haz cortado o botón presionado)
-  bool pendiente;   // hay una lectura distinta al nivel filtrado esperando confirmación
-  uint32_t desde;   // instante en que empezó esa lectura distinta
-  uint32_t ultimo;  // instante de la última bajada aceptada
+  volatile bool bajo;  // nivel filtrado: true = LOW confirmado (haz cortado o botón presionado)
+  bool pendiente;      // hay una lectura distinta al nivel filtrado esperando confirmación
+  uint32_t desde;      // instante en que empezó esa lectura distinta
+  uint32_t ultimo;     // instante de la última bajada aceptada
 };
 
 Canal s1 = { PIN_S1, false, false, 0, 0 };
@@ -41,11 +41,11 @@ Canal rst = { PIN_RST, false, false, 0, 0 };
 volatile uint32_t conteoS1 = 0;  // cajas contadas por el sensor 1; lo escribe solo la tarea de conteo
 volatile uint32_t conteoS2 = 0;  // cajas contadas por el sensor 2; lo escribe solo la tarea de conteo
 WebServer servidor(80);
-TaskHandle_t hConteo = nullptr;   // para medir la pila libre de la tarea de conteo
-volatile bool guardarYa = false;  // la tarea de conteo la sube al reiniciar; loop() la baja al guardar
+TaskHandle_t hConteo = nullptr;    // para medir la pila libre de la tarea de conteo
+volatile bool guardarYa = false;   // la tarea de conteo la sube al reiniciar; loop() la baja al guardar
 volatile bool pedirReset = false;  // la sube la web al pedir un reinicio; solo la tarea de conteo la baja y reinicia
-Preferences prefs;                // libreta (NVS) donde se anota el conteo
-uint32_t guardadoS1 = 0;          // últimos valores anotados en la libreta
+Preferences prefs;                 // libreta (NVS) donde se anota el conteo
+uint32_t guardadoS1 = 0;           // últimos valores anotados en la libreta
 uint32_t guardadoS2 = 0;
 uint32_t ultimoGuardado = 0;  // instante del último intento de guardado
 
@@ -129,12 +129,13 @@ h1{font-size:1.2rem;font-weight:600;margin:0 0 .5rem}
 #n{font-size:clamp(5rem,28vw,12rem);font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
 #e{margin-top:1rem;font-size:1rem}.ok{color:#1d8a4c}.mal{color:#c9372e}
 #d{display:flex;gap:2rem;justify-content:center;margin-top:.5rem;font-size:1.3rem;opacity:.85}#d b{font-weight:600}
+#d span{text-align:center}#d small{display:block;font-size:.85rem;opacity:.6}#d small.ok{opacity:1;font-weight:600}
 #l{margin-top:1rem}#l input{font-size:1.5rem;width:9rem;text-align:center;padding:.4rem}#l button{font-size:1.2rem;padding:.4rem 1rem;margin-left:.5rem}
 #r{margin-top:1.5rem}#r button{font-size:1rem;padding:.4rem .9rem;margin:.3rem .25rem 0}#q{font-size:1.1rem}
 </style></head><body><main>
-<h1>Cajas contadas</h1><div id="v" hidden><div id="n">-</div><div id="d"><span>S1 <b id="a">-</b></span><span>S2 <b id="b">-</b></span></div><div id="r"><button id="rs">Reiniciar conteo</button><div id="rc" hidden><div id="q"></div><button id="si">Sí, reiniciar</button><button id="no">Cancelar</button></div></div></div><div id="l" hidden><input id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN"><button id="ir">Ingresar</button></div><div id="e" class="mal">Conectando</div>
+<h1>Cajas contadas</h1><div id="v" hidden><div id="n">-</div><div id="d"><span>S1 <b id="a">-</b><small id="ea">Libre</small></span><span>S2 <b id="b">-</b><small id="eb">Libre</small></span></div><div id="r"><button id="rs">Reiniciar conteo</button><div id="rc" hidden><div id="q"></div><button id="si">Sí, reiniciar</button><button id="no">Cancelar</button></div></div></div><div id="l" hidden><input id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN"><button id="ir">Ingresar</button></div><div id="e" class="mal">Conectando</div>
 </main><script>
-const g=id=>document.getElementById(id),n=g('n'),e=g('e'),a=g('a'),b=g('b'),v=g('v'),l=g('l'),pin=g('pin');
+const g=id=>document.getElementById(id),n=g('n'),e=g('e'),a=g('a'),b=g('b'),v=g('v'),l=g('l'),pin=g('pin'),ea=g('ea'),eb=g('eb');
 let aviso='Ingresa el PIN',bloq=0;
 function mostrar(ok){v.hidden=!ok;l.hidden=ok;}
 const rs=g('rs'),rc=g('rc'),q=g('q');
@@ -151,6 +152,7 @@ async function leer(){
     const d=await r.json();
     mostrar(true);
     n.textContent=d.count;a.textContent=d.s1;b.textContent=d.s2;e.textContent='En línea';e.className='ok';
+    ea.textContent=d.e1?'Caja pasando':'Libre';ea.className=d.e1?'ok':'';eb.textContent=d.e2?'Caja pasando':'Libre';eb.className=d.e2?'ok':'';
   }catch(x){e.textContent='Sin conexión con el contador';e.className='mal';}
 }
 async function entrar(){
@@ -306,9 +308,9 @@ void rutaConteo() {
   }
   uint32_t c1 = conteoS1;
   uint32_t c2 = conteoS2;
-  char json[64];
-  snprintf(json, sizeof(json), "{\"count\":%lu,\"s1\":%lu,\"s2\":%lu}",
-           (unsigned long)(c1 + c2), (unsigned long)c1, (unsigned long)c2);
+  char json[80];
+  snprintf(json, sizeof(json), "{\"count\":%lu,\"s1\":%lu,\"s2\":%lu,\"e1\":%u,\"e2\":%u}",
+           (unsigned long)(c1 + c2), (unsigned long)c1, (unsigned long)c2, s1.bajo ? 1u : 0u, s2.bajo ? 1u : 0u);
   servidor.sendHeader("Cache-Control", "no-store");
   servidor.send_P(200, "application/json", json);  // acepta también un buffer en RAM, sin copiarlo a String
 }
